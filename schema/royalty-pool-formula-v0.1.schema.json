@@ -125,7 +125,7 @@
         }
       }
     },
- "resonance_score": {
+  "resonance_score": {
   "type": "object",
   "additionalProperties": false,
   "required": ["definition", "variables"],
@@ -185,9 +185,8 @@
       }
     }
   }
-}
-              
-            },
+},        
+            
             "O_i_t": {
               "$ref": "#/$defs/variableDefinition"
             },
