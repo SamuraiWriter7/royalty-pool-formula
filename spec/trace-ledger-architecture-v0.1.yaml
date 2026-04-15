@@ -1,0 +1,674 @@
+spec:
+  id: trace-ledger-architecture-v0.1
+  name: Trace Ledger Architecture
+  short_name: TLA
+  version: "0.1.0"
+  status: draft
+  language: ja
+  objective: >
+    Trace Ledger Architecture は、trace records、ARA の判断結果、
+    allocation / recirculation / hold / dispute / recalculation の履歴を、
+    監査可能かつ改ざん検知可能な形で保持するための台帳アーキテクチャ仕様である。
+    本仕様は、分散イベント流と監査台帳を分離しつつ、
+    痕跡の記録・判断・配分・異議申立て・再計算を時系列に固定する。
+  design_principles:
+    - append_only
+    - tamper_evidence
+    - auditability
+    - provenance_preservation
+    - separation_of_stream_and_ledger
+    - deterministic_commit_boundary
+    - replayability
+    - minimal_privileged_mutation
+  normative_language:
+    must:
+      - 必須条件または違反条件を示す
+    should:
+      - 推奨条件を示す
+    may:
+      - 任意条件または拡張可能性を示す
+
+context:
+  architecture_type: dual_layer_trace_ledger
+  primary_purpose:
+    - trace_commit
+    - allocation_audit
+    - recirculation_audit
+    - hold_tracking
+    - dispute_tracking
+    - recalculation_history
+  upstream_dependencies:
+    - ara-engine-v0.1
+    - royalty-pool-formula-v0.1
+    - cultural-lineage-map-v0.1
+  downstream_dependencies:
+    - allocation-report-v0.1
+    - lineage-report-v0.1
+    - dispute-review-v0.1
+  accounting_unit:
+    name: QCoin
+    type: internal_non_transferable_unit
+    description: >
+      台帳は内部会計単位の記録と検証を扱う。
+      外部送金や交換市場の成立は前提としない。
+
+architecture:
+  layers:
+    event_stream:
+      description: >
+        trace ingestion、ARA 実行要求、異議申立て、再計算要求などを運ぶイベント流。
+        高スループットを重視するが、最終監査の唯一ソースにはしない。
+    audit_ledger:
+      description: >
+        commit された判断結果と関連メタデータを append-only で固定する監査台帳。
+        hash chain または同等の改ざん検知機構を備える。
+    payload_store:
+      description: >
+        report 本体や大きな trace batch などを外部保存する参照先。
+        台帳には hash と payload_ref を残す。
+    verification_layer:
+      description: >
+        record hash, previous hash, snapshot hash, export hash を検証する層。
+  separation_of_concerns:
+    - event_stream transports mutable operational events
+    - audit_ledger stores committed immutable records
+    - payload_store keeps large documents and raw artifacts
+    - verification_layer checks integrity over time
+
+ledger_identity:
+  ledger_id_prefix: tla
+  ledger_mode:
+    - append_only
+    - immutable_commit_records
+    - replayable_event_history
+  commit_policy:
+    commit_boundary: >
+      allocation_report, hold_report, anomaly_report, explanation_report,
+      graph_snapshot などの確定出力単位ごとに commit する。
+    deterministic_commit_required: true
+  versioning:
+    config_version_must_be_recorded: true
+    formula_version_must_be_recorded: true
+    policy_version_must_be_recorded: true
+    engine_version_must_be_recorded: true
+
+roles:
+  event_broker:
+    description: イベント流を受付・配送する
+  ledger_writer:
+    description: commit 境界で audit ledger に書き込む
+  ledger_verifier:
+    description: hash chain と payload hash を検証する
+  payload_store:
+    description: 大きなレポートや raw artifacts の参照先
+  ara:
+    description: scoring, allocation, hold, recalc を行う
+  reviewer:
+    description: hold / dispute / recalc を監査する人間
+  graph_service:
+    description: graph snapshot と lineage export を供給する
+  reconciliation_service:
+    description: ledger と payload_store の整合性を点検する
+
+inputs:
+  required:
+    commit_event:
+      type: object
+      description: 台帳へ固定するための確定イベント
+      required_fields:
+        - event_id
+        - event_type
+        - timestamp
+        - actor
+        - payload_ref
+    commit_context:
+      type: object
+      description: 期間、設定、エンジン、数式バージョンなど
+      required_fields:
+        - period_id
+        - config_version
+        - engine_version
+        - formula_version
+    integrity_material:
+      type: object
+      description: hash 計算に必要な素材
+      required_fields:
+        - payload_hash
+        - previous_hash
+    provenance_context:
+      type: object
+      description: 起源や trace batch 参照
+      required_fields:
+        - trace_batch_refs
+  optional:
+    reviewer_context:
+      type: object
+      description: reviewer による補足情報
+    dispute_context:
+      type: object
+      description: 異議申立て案件の参照
+    graph_snapshot_ref:
+      type: object
+      description: cultural lineage map への参照
+    prior_commit_ref:
+      type: object
+      description: 再計算や差分比較用の旧 commit 参照
+
+record_model:
+  ledger_event:
+    type: object
+    required_fields:
+      - event_id
+      - event_type
+      - timestamp
+      - actor
+      - payload_ref
+      - payload_hash
+      - previous_hash
+      - current_hash
+      - commit_status
+    properties:
+      event_id:
+        type: string
+      event_type:
+        type: string
+        allowed_values:
+          - TRACE_BATCH_RECEIVED
+          - TRACE_RECORDED
+          - PERMISSION_EVALUATED
+          - ARA_SCORING_COMPLETED
+          - ALLOCATION_COMPUTED
+          - RECIRCULATION_COMPUTED
+          - HOLD_ASSIGNED
+          - ANOMALY_FLAGGED
+          - REPORT_GENERATED
+          - GRAPH_SNAPSHOT_CREATED
+          - GRAPH_EXPORT_GENERATED
+          - ALLOCATION_COMMITTED
+          - HOLD_COMMITTED
+          - DISPUTE_OPENED
+          - DISPUTE_RESOLVED
+          - RECALC_REQUESTED
+          - RECALC_EXECUTED
+          - REVIEW_NOTE_ADDED
+          - RECONCILIATION_CHECKED
+      timestamp:
+        type: string
+        format: date-time
+      actor:
+        type: object
+        required_fields:
+          - actor_type
+          - actor_id
+        properties:
+          actor_type:
+            type: string
+            allowed_values:
+              - ARA
+              - reviewer
+              - policy_engine
+              - graph_service
+              - reconciliation_service
+              - system
+          actor_id:
+            type: string
+      payload_ref:
+        type: object
+        required_fields:
+          - storage
+          - key
+        properties:
+          storage:
+            type: string
+          key:
+            type: string
+          content_type:
+            type: string
+      payload_hash:
+        type: string
+      previous_hash:
+        type: string
+      current_hash:
+        type: string
+      trace_batch_refs:
+        type: array
+        item_type: string
+      report_refs:
+        type: array
+        item_type: string
+      graph_snapshot_ref:
+        type: string
+      config_version:
+        type: string
+      formula_version:
+        type: string
+      engine_version:
+        type: string
+      policy_version:
+        type: string
+      commit_status:
+        type: string
+        allowed_values:
+          - pending
+          - committed
+          - failed
+          - superseded
+      metadata:
+        type: object
+        additional_properties: true
+
+payload_models:
+  allocation_payload:
+    description: allocation_report 本体
+    recommended_fields:
+      - report_id
+      - period_id
+      - pool_amount
+      - candidate_results
+      - total_allocated
+      - report_hash
+  hold_payload:
+    description: hold_report 本体
+    recommended_fields:
+      - hold_id
+      - reasons
+      - affected_candidates
+      - reviewer_required
+  anomaly_payload:
+    description: anomaly_report 本体
+    recommended_fields:
+      - anomaly_report_id
+      - anomaly_items
+      - severity
+      - recommended_action
+  explanation_payload:
+    description: explanation_report 本体
+    recommended_fields:
+      - explanation_report_id
+      - machine_explanations
+      - human_summary
+  graph_snapshot_payload:
+    description: cultural lineage map snapshot
+    recommended_fields:
+      - snapshot_id
+      - period_id
+      - graph_hash
+      - node_count
+      - edge_count
+  dispute_payload:
+    description: dispute record
+    recommended_fields:
+      - dispute_id
+      - target_refs
+      - reason
+      - status
+  recalc_payload:
+    description: recalculation result
+    recommended_fields:
+      - recalc_id
+      - previous_report_ref
+      - new_report_ref
+      - delta_summary
+
+hashing:
+  objective: >
+    各 commit を previous_hash と payload_hash に結びつけ、
+    連鎖的な改ざん検知を可能にする。
+  formulas:
+    payload_hash:
+      expression: "payload_hash = HASH(canonical_payload)"
+    current_hash:
+      expression: >
+        current_hash = HASH(
+          event_id + event_type + timestamp + actor_id +
+          payload_hash + previous_hash + config_version +
+          formula_version + engine_version + policy_version
+        )
+  requirements:
+    - canonical_serialization_must_be_used
+    - previous_hash_must_reference_prior_committed_record
+    - current_hash_must_be_unique_for_unique_commit_material
+  canonicalization:
+    preferred_formats:
+      - canonical_json
+      - normalized_yaml_to_json
+    rule: >
+      改行、順序差、空白差による hash 揺れを防ぐため、
+      canonical serialization を必須とする。
+
+commit_flow:
+  execution_order:
+    - receive_operational_event
+    - validate_commit_eligibility
+    - resolve_payload_ref
+    - compute_payload_hash
+    - fetch_previous_hash
+    - compute_current_hash
+    - write_ledger_record
+    - verify_roundtrip
+    - mark_committed
+  eligibility_rules:
+    - name: allocation_requires_reports
+      condition: allocation_report exists and payload_hash resolvable
+    - name: hold_requires_reason
+      condition: hold_report includes reasons
+    - name: recalc_requires_previous_reference
+      condition: previous_report_ref exists
+    - name: dispute_resolution_requires_dispute_reference
+      condition: dispute_id exists
+  commit_outputs:
+    - ledger_event
+    - verification_receipt
+    - reconciliation_hint
+
+event_stream:
+  objective: >
+    非同期の operational events を流し、ARA, graph_service, reviewer などに配送する。
+  characteristics:
+    append_first: true
+    ordering_scope: partition_local
+    replay_supported: true
+    compaction_allowed: optional
+  event_types:
+    - TRACE_BATCH_RECEIVED
+    - ARA_RUN_REQUESTED
+    - ARA_RUN_COMPLETED
+    - HOLD_REVIEW_REQUESTED
+    - DISPUTE_OPENED
+    - DISPUTE_RESOLVED
+    - RECALC_REQUESTED
+    - GRAPH_SNAPSHOT_REQUESTED
+    - GRAPH_EXPORT_REQUESTED
+    - RECONCILIATION_REQUESTED
+  warning: >
+    event_stream は operational transport であり、監査の唯一ソースにしてはならない。
+
+audit_ledger:
+  objective: >
+    確定済みイベントと関連参照を改ざん検知可能な形で保持する。
+  properties:
+    append_only: true
+    immutable_update_model: true
+    supports_history: true
+    supports_verification_proof: true
+    supports_point_in_time_lookup: true
+  required_indexes:
+    - event_id
+    - event_type
+    - timestamp
+    - period_id
+    - trace_batch_refs
+    - report_refs
+    - current_hash
+    - previous_hash
+
+payload_store:
+  objective: >
+    レポート本体、graph exports、raw trace bundles などの大きなデータを保持する。
+  properties:
+    immutable_objects_preferred: true
+    content_addressable_storage_supported: true
+    retention_policy_required: true
+  object_types:
+    - allocation_report
+    - hold_report
+    - anomaly_report
+    - explanation_report
+    - graph_snapshot
+    - graph_export
+    - dispute_bundle
+    - recalc_bundle
+  integrity_rule:
+    description: >
+      payload_store 上の object hash は ledger_event.payload_hash と一致しなければならない。
+
+verification:
+  objective: >
+    ledger と payload の整合、hash chain の連続性、参照切れの有無を検証する。
+  checks:
+    hash_chain_continuity:
+      description: previous_hash と current_hash の連鎖が成立するか
+    payload_hash_match:
+      description: payload_ref の実体 hash が ledger payload_hash と一致するか
+    required_ref_existence:
+      description: report_refs, trace_batch_refs, graph_snapshot_ref が解決可能か
+    version_consistency:
+      description: config_version / formula_version / engine_version / policy_version が存在するか
+    replay_consistency:
+      description: replay で同じ deterministic result が得られるか
+  outputs:
+    verification_receipt:
+      required_fields:
+        - receipt_id
+        - checked_at
+        - target_event_id
+        - result
+        - failed_checks
+        - verifier_id
+
+reconciliation:
+  objective: >
+    ledger と payload_store と graph snapshot の間に食い違いがないか定期点検する。
+  triggers:
+    - scheduled_daily
+    - pre_release
+    - post_recalc
+    - reviewer_requested
+  tasks:
+    - compare_payload_hashes
+    - detect_missing_objects
+    - detect_orphaned_reports
+    - detect_graph_snapshot_mismatch
+    - detect_superseded_without_reference
+  outputs:
+    reconciliation_report:
+      required_fields:
+        - reconciliation_id
+        - checked_period
+        - checked_count
+        - mismatch_count
+        - missing_refs
+        - recommended_actions
+
+dispute_and_review:
+  objective: >
+    異議申立てと人間監査の履歴を台帳上で追跡可能にする。
+  dispute_flow:
+    - DISPUTE_OPENED
+    - HOLD_ASSIGNED
+    - REVIEW_NOTE_ADDED
+    - RECALC_REQUESTED
+    - RECALC_EXECUTED
+    - DISPUTE_RESOLVED
+  required_dispute_fields:
+    - dispute_id
+    - opened_at
+    - target_refs
+    - opened_by
+    - reason
+    - status
+  reviewer_notes:
+    supported: true
+    required_fields:
+      - reviewer_id
+      - note
+      - timestamp
+      - target_ref
+
+recalculation:
+  objective: >
+    設定変更、異議申立て解決、trace 修正などに応じて再計算し、
+    旧結果との差分を記録する。
+  required_rules:
+    - previous_commit_must_be_referenced
+    - superseded_records_must_remain_queryable
+    - delta_summary_must_be_stored
+    - recalculation_event_must_be_committed
+  supersession_model:
+    description: >
+      旧 record を削除せず、commit_status = superseded とし、
+      new record から previous_report_ref または supersedes_ref を辿れるようにする。
+  outputs:
+    recalc_commit_bundle:
+      required_fields:
+        - recalc_id
+        - previous_event_id
+        - new_event_id
+        - delta_summary
+        - committed_at
+
+retention_and_access:
+  retention_policy:
+    ledger_records:
+      default: indefinite
+    payload_objects:
+      default: policy_defined
+    event_stream_messages:
+      default: operational_retention
+  access_control:
+    roles:
+      reader:
+        permissions:
+          - read_committed_records
+      reviewer:
+        permissions:
+          - read_committed_records
+          - read_hold_and_dispute_records
+          - add_reviewer_notes
+      writer:
+        permissions:
+          - commit_eligible_records
+      verifier:
+        permissions:
+          - run_verification_checks
+          - run_reconciliation
+      admin:
+        permissions:
+          - manage_configs
+          - manage_access
+    principle: least_privilege
+  privacy:
+    description: >
+      配分に不要な生データは payload_store で制限し、
+      ledger には最小限の参照情報のみ保持する。
+
+security_and_privacy:
+  data_minimization:
+    description: >
+      raw content 全文を ledger に直接書き込まない。
+      必要なら payload_ref と hash で参照する。
+  pii_policy:
+    description: >
+      個人識別情報は pseudonymize または mask できるべきである。
+  tamper_evidence:
+    description: >
+      hash chain と verification receipt を通じて改ざん検知を可能にする。
+  key_management:
+    description: >
+      署名を導入する場合は鍵管理方針を別仕様で定義する。
+  config_integrity:
+    description: >
+      計算に影響する config は versioned artifact として記録されなければならない。
+
+queries:
+  recommended_queries:
+    get_commit_by_event_id:
+      description: event_id から commit record を取得する
+    get_history_for_report:
+      description: report_ref から関連 commit 履歴を取得する
+    get_dispute_chain:
+      description: dispute_id に紐づく開設から解決までの履歴を取得する
+    get_recalc_chain:
+      description: superseded 関係を含む再計算履歴を取得する
+    verify_event:
+      description: 単一 event の hash 検証を行う
+    verify_period:
+      description: 期間単位で連鎖整合性を検証する
+
+validation:
+  hard_rules:
+    - name: committed_record_must_have_hashes
+      expression: >
+        committed ledger_event has payload_hash and previous_hash and current_hash
+    - name: commit_requires_payload_ref
+      expression: payload_ref != null
+    - name: current_hash_must_exist
+      expression: current_hash != null
+    - name: allocation_commit_requires_report
+      expression: ALLOCATION_COMMITTED implies allocation_report ref exists
+    - name: recalc_requires_previous_reference
+      expression: RECALC_EXECUTED implies previous reference exists
+    - name: dispute_resolved_requires_dispute_id
+      expression: DISPUTE_RESOLVED implies dispute_id exists
+  soft_rules:
+    - name: verification_should_run_after_commit
+      expression: verification receipt should be generated
+    - name: reconciliation_should_run_regularly
+      expression: reconciliation should be scheduled
+    - name: graph_snapshot_should_be_linked
+      expression: graph_snapshot_ref should be present when available
+
+failure_modes:
+  recoverable:
+    - payload_store_temporarily_unavailable
+    - delayed_previous_hash_lookup
+    - verification_timeout
+    - reconciliation_timeout
+  unrecoverable:
+    - corrupted_hash_chain
+    - missing_required_payload
+    - invalid_canonical_serialization
+    - duplicate_event_id_with_conflicting_payload
+  handling:
+    recoverable:
+      action: retry_or_mark_pending
+    unrecoverable:
+      action: fail_and_emit_critical_ledger_event
+
+implementation_notes:
+  recommended_stack:
+    event_stream: kafka_or_equivalent
+    audit_ledger: immudb_or_equivalent
+    payload_store: object_storage_or_equivalent
+    verifier: hash_chain_verifier_service
+  separation_of_concerns:
+    - event stream transports operational messages
+    - ledger stores immutable committed records
+    - payload store holds large artifacts
+    - verification layer proves integrity
+  remarks:
+    - stream と ledger を同一視しないこと
+    - old records を削除せず superseded で残すこと
+    - payload hash と ledger hash を分けると運用が安定する
+    - reviewer action も監査対象に含めること
+
+sample_execution:
+  input_summary:
+    commit_event:
+      event_id: evt_2026_04_0001
+      event_type: ALLOCATION_COMMITTED
+      timestamp: "2026-04-15T10:00:00Z"
+      actor:
+        actor_type: ARA
+        actor_id: ara_v0_1
+      payload_ref:
+        storage: object_store
+        key: reports/allocation/ar_2026_04_001.json
+      payload_hash: "hash_payload_ar_2026_04_001"
+      previous_hash: "hash_prev_evt_0000"
+    commit_context:
+      period_id: "2026-04"
+      config_version: "cfg_0.1.0"
+      formula_version: "royalty-pool-formula-v0.1"
+      engine_version: "ara-engine-v0.1"
+      policy_version: "policy-profile-v0.1"
+  output_summary:
+    ledger_event:
+      event_id: evt_2026_04_0001
+      current_hash: "hash_current_evt_0001"
+      commit_status: committed
+    verification_receipt:
+      receipt_id: vr_2026_04_0001
+      result: passed
+    reconciliation_hint:
+      next_check: scheduled_daily
