@@ -1,0 +1,695 @@
+spec:
+  id: cultural-lineage-map-v0.1
+  name: Cultural Lineage Map
+  short_name: CLM
+  version: "0.1.0"
+  status: draft
+  language: ja
+  objective: >
+    Cultural Lineage Map は、問い・作品・痕跡・構造・配分・還流の関係を
+    可視化するための文化系譜マップ仕様である。
+    ARA の配分結果、trace records、lineage context をもとに、
+    文化的寄与の系譜、派生関係、価値の流れを監査可能かつ説明可能な形で表現する。
+  design_principles:
+    - lineage_visibility
+    - trace_to_value_visibility
+    - structure_preservation
+    - explainability
+    - auditability
+    - time_aware_mapping
+    - multi_layer_visualization
+    - graph_native_representation
+  normative_language:
+    must:
+      - 必須条件または成立条件を示す
+    should:
+      - 推奨条件を示す
+    may:
+      - 任意条件または拡張可能性を示す
+
+context:
+  map_type: cultural_property_graph
+  primary_purpose:
+    - lineage_visualization
+    - resonance_visualization
+    - allocation_flow_visualization
+    - recirculation_visualization
+    - reviewer_support
+  upstream_dependencies:
+    - ara-engine-v0.1
+    - trace-vector-profile-v0.1
+    - royalty-pool-formula-v0.1
+  downstream_dependencies:
+    - trace-ledger-architecture-v0.1
+    - lineage-report-v0.1
+    - graph-export-v0.1
+  graph_model:
+    style: property_graph
+    description: >
+      ノードとエッジの双方に属性を持てる property graph を前提とする。
+      ベクトル本体は原則として外部 vector store に保持し、
+      本マップでは関係要約と表示用メタデータを保持する。
+
+map_identity:
+  map_id_prefix: clm
+  snapshot_policy:
+    supports_snapshots: true
+    supports_period_views: true
+    supports_delta_views: true
+  render_modes:
+    - overview
+    - lineage_focus
+    - value_flow_focus
+    - structure_focus
+    - time_series
+    - dispute_review
+  target_consumers:
+    - reviewer
+    - researcher
+    - implementer
+    - rights_holder
+    - system_operator
+
+roles:
+  graph_engine:
+    description: ノード・エッジ・属性を保持しクエリを処理する
+  layout_engine:
+    description: グラフレイアウトを計算する
+  renderer:
+    description: 表示形式ごとの描画を担当する
+  ara:
+    description: allocation, recirculation, anomaly 情報の供給元
+  vector_store:
+    description: 類似候補抽出とベクトル検索の供給元
+  audit_ledger:
+    description: スナップショットと変更履歴の固定先
+  reviewer:
+    description: 可視化結果を確認し、保留や異議申立てを評価する
+  export_service:
+    description: graph JSON, Graphviz, CSV, image 等へ出力する
+
+inputs:
+  required:
+    lineage_context:
+      type: object
+      description: 系譜ノードと系譜エッジの基礎情報
+      required_fields:
+        - lineage_nodes
+        - lineage_edges
+    ara_results:
+      type: object
+      description: allocation_report, explanation_report, anomaly_report の要約
+      required_fields:
+        - allocation_report
+    trace_batch_refs:
+      type: array
+      description: 対象 trace batch 参照
+    period_context:
+      type: object
+      description: 対象期間または時間窓
+      required_fields:
+        - period_id
+        - time_range
+    visual_config:
+      type: object
+      description: 表示ルールとフィルタ設定
+      required_fields:
+        - default_mode
+        - node_rules
+        - edge_rules
+  optional:
+    reviewer_annotations:
+      type: array
+      description: 人間監査者の注記
+    dispute_context:
+      type: object
+      description: 異議申立て中の追加表示条件
+    prior_snapshots:
+      type: array
+      description: 過去スナップショット比較用
+    clustering_profile:
+      type: object
+      description: クラスタリング方式の上書き設定
+    export_requests:
+      type: array
+      description: 出力形式指定
+
+node_model:
+  common_properties:
+    required:
+      - node_id
+      - node_type
+      - label
+    optional:
+      - description
+      - period_id
+      - created_at
+      - updated_at
+      - provenance_ref
+      - source_refs
+      - metrics
+      - display
+  node_types:
+    Person:
+      description: 問い、作品、構造、権利に関与する人間主体
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - role
+        - attribution_status
+    AI_Agent:
+      description: ARA や生成AIなどの機械主体
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - engine_version
+        - operator
+    Question:
+      description: 起点となる問い
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - depth_score
+        - abstraction_level
+        - inquiry_class
+    Work:
+      description: 書籍、記事、仕様、生成物など
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - work_type
+        - language
+        - origin_status
+    Trace:
+      description: 抽象痕跡または trace record の要約表現
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - trace_batch_id
+        - confidence_summary
+        - vector_ref
+    Structure:
+      description: 再利用可能な論理構造、構文型、思想フレーム
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - structure_type
+        - reuse_score
+        - originality_score
+    Allocation:
+      description: 配分結果または候補結果
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - allocation_amount
+        - accounting_unit
+        - allocation_status
+    Period:
+      description: 月次、四半期、特定時間窓など
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - start_time
+        - end_time
+    Concept:
+      description: 思想群、概念群、文化的参照点
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - concept_family
+        - reference_density
+    Cluster:
+      description: 表示上のまとまり
+      required_properties:
+        - node_id
+        - label
+      optional_properties:
+        - cluster_type
+        - cluster_score
+
+edge_model:
+  common_properties:
+    required:
+      - edge_id
+      - edge_type
+      - source
+      - target
+    optional:
+      - weight
+      - confidence
+      - period_id
+      - created_at
+      - provenance_ref
+      - metrics
+      - display
+  edge_types:
+    ASKED:
+      description: Person または AI_Agent が Question を発した
+    GENERATED:
+      description: Person または AI_Agent が Work を生んだ
+    REFERENCED:
+      description: Work や Trace が他の Work / Concept / Structure を参照した
+    RESONATED_WITH:
+      description: Trace または Work が Question / Structure / Concept と共鳴した
+    DERIVED_FROM:
+      description: Work または Structure が他の Work / Structure から派生した
+    CONTAINS_TRACE:
+      description: Work が Trace を含む
+    EMBODIES_STRUCTURE:
+      description: Work が Structure を体現する
+    ALLOCATED_TO:
+      description: Allocation が Person / Work / Structure に配分された
+    RECIRCULATED_TO:
+      description: Allocation または Work から上流へ還流した
+    EVALUATED_BY:
+      description: Trace や Allocation が ARA に評価された
+    BELONGS_TO_PERIOD:
+      description: Node または Edge が特定 Period に属する
+    GROUPED_IN:
+      description: ノードが Cluster に属する
+    DISPUTED_BY:
+      description: Allocation または Trace が異議申立て対象になった
+    REVIEWED_BY:
+      description: reviewer が対象を確認した
+
+edge_semantics:
+  required_properties_by_type:
+    RESONATED_WITH:
+      - weight
+      - confidence
+    DERIVED_FROM:
+      - weight
+    ALLOCATED_TO:
+      - weight
+      - allocation_amount
+    RECIRCULATED_TO:
+      - weight
+      - allocation_amount
+    EVALUATED_BY:
+      - confidence
+  recommended_properties:
+    - origin_factor
+    - agency_factor
+    - resonance_score
+    - allocation_amount
+    - recirculation_ratio
+    - time_window
+    - anomaly_flag
+
+graph_construction:
+  objective: >
+    入力データから表示可能な系譜グラフを構築する。
+  execution_order:
+    - ingest_sources
+    - normalize_nodes
+    - normalize_edges
+    - merge_duplicates
+    - attach_period_context
+    - enrich_metrics
+    - cluster_graph
+    - compute_layout
+    - generate_views
+    - export_snapshot
+  merge_policy:
+    duplicate_node_rule: >
+      同一 node_type かつ同一 origin_ref を持つノードは merge 候補として扱う。
+    duplicate_edge_rule: >
+      同一 source, target, edge_type のエッジは期間内で集約してもよい。
+    preservation_rule: >
+      merge 前の参照元や provenance_ref は失ってはならない。
+  source_priority:
+    - ara_results
+    - lineage_context
+    - trace_batch_refs
+    - reviewer_annotations
+    - prior_snapshots
+
+metrics:
+  node_metrics:
+    influence_score:
+      description: 下流派生、共鳴、配分を総合した影響度
+      expression: >
+        influence_score = normalized(outgoing_resonance + outgoing_derivations + incoming_allocations)
+    allocation_score:
+      description: 対象ノードが受けた総配分量
+    recirculation_score:
+      description: 上流還流によって受けたまたは流した量
+    lineage_depth:
+      description: 起点ノードからの深さ
+    structural_reuse_score:
+      description: 構造再利用の頻度と強度
+    question_origin_score:
+      description: 問い起点としての寄与度
+  edge_metrics:
+    relation_strength:
+      description: 関係強度
+    confidence_score:
+      description: エッジの信頼度
+    temporal_density:
+      description: 期間内の関係密度
+    flow_amount:
+      description: 配分または還流の量
+  metric_normalization:
+    enabled: true
+    range: "[0,1]"
+
+clustering:
+  objective: >
+    問い圏、構造圏、価値圏などのまとまりを可視化しやすくする。
+  default_strategy:
+    mode: hybrid
+    components:
+      - topology_based
+      - semantic_label_based
+      - allocation_flow_based
+  cluster_types:
+    - question_cluster
+    - structure_cluster
+    - value_flow_cluster
+    - dispute_cluster
+    - period_cluster
+  cluster_rules:
+    question_cluster:
+      condition: >
+        Question を中心に ASKED, RESONATED_WITH, GENERATED が高密度な場合
+    structure_cluster:
+      condition: >
+        Structure と EMBODIES_STRUCTURE, DERIVED_FROM が高密度な場合
+    value_flow_cluster:
+      condition: >
+        ALLOCATED_TO, RECIRCULATED_TO の流量が高密度な場合
+  outputs:
+    - cluster_assignments
+    - cluster_scores
+
+visualization:
+  layers:
+    - inquiry_layer
+    - structure_layer
+    - trace_layer
+    - allocation_layer
+    - recirculation_layer
+    - anomaly_layer
+  default_mode: overview
+  node_rules:
+    size:
+      source_metric: allocation_score
+      fallback_metric: influence_score
+    color:
+      by_node_type:
+        Person: blue
+        AI_Agent: purple
+        Question: orange
+        Work: green
+        Trace: gray
+        Structure: red
+        Allocation: gold
+        Period: black
+        Concept: teal
+        Cluster: brown
+    shape:
+      by_node_type:
+        Person: circle
+        AI_Agent: hexagon
+        Question: diamond
+        Work: box
+        Trace: dot
+        Structure: octagon
+        Allocation: doublecircle
+        Period: capsule
+        Concept: ellipse
+        Cluster: folder
+    label_policy:
+      show_primary_label: true
+      truncate_long_labels: true
+      max_label_length: 48
+  edge_rules:
+    thickness:
+      source_metric: relation_strength
+    color:
+      by_edge_type:
+        ASKED: blue
+        GENERATED: green
+        REFERENCED: gray
+        RESONATED_WITH: orange
+        DERIVED_FROM: red
+        CONTAINS_TRACE: gray
+        EMBODIES_STRUCTURE: maroon
+        ALLOCATED_TO: gold
+        RECIRCULATED_TO: purple
+        EVALUATED_BY: black
+        BELONGS_TO_PERIOD: lightgray
+        GROUPED_IN: teal
+        DISPUTED_BY: crimson
+        REVIEWED_BY: navy
+    style:
+      by_edge_type:
+        REFERENCED: dashed
+        DERIVED_FROM: solid
+        RESONATED_WITH: bold
+        RECIRCULATED_TO: dotted
+        DISPUTED_BY: dashed
+    arrow_policy:
+      directed_edges: true
+  filtering:
+    supports:
+      - by_period
+      - by_node_type
+      - by_edge_type
+      - by_min_weight
+      - by_min_confidence
+      - by_cluster
+      - by_anomaly_flag
+  time_series:
+    supports_slider: true
+    supports_snapshots: true
+    supports_diff_view: true
+    diff_view_rule: >
+      prior_snapshot と current_snapshot の差分ノード・差分エッジを強調表示する。
+
+views:
+  overview:
+    description: 全体の文化系譜を俯瞰する
+  lineage_focus:
+    description: DERIVED_FROM, EMBODIES_STRUCTURE, REFERENCED を中心に表示する
+  inquiry_focus:
+    description: Question 起点の広がりを表示する
+  value_flow_focus:
+    description: ALLOCATED_TO, RECIRCULATED_TO を中心に表示する
+  anomaly_focus:
+    description: anomaly_flag 付きノード・エッジを強調する
+  dispute_review:
+    description: disputed items, holds, reviewer notes を表示する
+  period_focus:
+    description: 特定期間の関係のみ表示する
+
+outputs:
+  graph_snapshot:
+    type: object
+    required_fields:
+      - snapshot_id
+      - period_id
+      - node_count
+      - edge_count
+      - graph_hash
+      - generated_at
+  lineage_report:
+    type: object
+    required_fields:
+      - report_id
+      - period_id
+      - top_questions
+      - top_structures
+      - top_value_flows
+      - recirculation_summary
+      - anomaly_summary
+  graph_exports:
+    supported_formats:
+      - json
+      - graphviz_dot
+      - csv_nodes
+      - csv_edges
+      - png
+      - svg
+    required_metadata:
+      - export_id
+      - snapshot_id
+      - format
+      - generated_at
+  review_bundle:
+    type: object
+    required_fields:
+      - snapshot_id
+      - filtered_subgraph
+      - linked_reports
+      - reviewer_annotations
+
+ledger_integration:
+  snapshot_commit:
+    enabled: true
+    rule: >
+      graph_snapshot の hash と主要 export の参照先は audit_ledger に記録されるべきである。
+  required_event_types:
+    - GRAPH_SNAPSHOT_CREATED
+    - GRAPH_EXPORT_GENERATED
+    - GRAPH_DIFF_COMPUTED
+    - REVIEW_BUNDLE_CREATED
+  commit_fields:
+    - snapshot_id
+    - period_id
+    - graph_hash
+    - previous_hash
+    - payload_ref
+
+graph_queries:
+  recommended_queries:
+    upstream_lineage:
+      description: 対象ノードの上流系譜を取得する
+    downstream_impact:
+      description: 対象ノードが下流へ与えた影響を取得する
+    value_flow_path:
+      description: 配分と還流の経路を取得する
+    structure_reuse_network:
+      description: 構造再利用のネットワークを取得する
+    dispute_subgraph:
+      description: 異議申立て関連部分グラフを取得する
+
+review_support:
+  objective: >
+    人間監査者が保留案件や異議申立て案件を理解しやすくする。
+  required_features:
+    - highlight_held_nodes
+    - highlight_disputed_edges
+    - show_explanation_links
+    - show_policy_coefficients
+    - show_anomaly_flags
+  reviewer_annotations:
+    supported: true
+    fields:
+      - reviewer_id
+      - target_id
+      - note
+      - timestamp
+      - severity
+
+security_and_privacy:
+  data_minimization:
+    description: >
+      可視化に不要な raw content や過剰な個人情報は保持しない。
+  pii_policy:
+    description: >
+      表示時には subject identifiers を pseudonymize してもよい。
+  access_control:
+    description: >
+      view mode により表示可能なノード・エッジ範囲を制御できるべきである。
+  provenance_integrity:
+    description: >
+      merge, cluster, export のいずれでも provenance_ref を失ってはならない。
+
+validation:
+  hard_rules:
+    - name: all_nodes_must_have_id_type_label
+      expression: every node has node_id, node_type, label
+    - name: all_edges_must_have_source_target_type
+      expression: every edge has edge_id, source, target, edge_type
+    - name: allocated_edges_must_have_amount
+      expression: ALLOCATED_TO and RECIRCULATED_TO edges must include allocation_amount
+    - name: snapshot_must_have_hash
+      expression: graph_snapshot.graph_hash != null
+    - name: period_context_must_exist
+      expression: period_context != null
+  soft_rules:
+    - name: node_display_should_exist
+      expression: node display metadata should be present
+    - name: cluster_assignments_should_be_generated
+      expression: cluster assignments should exist for overview mode
+    - name: review_bundle_should_link_reports
+      expression: review bundle should include linked reports
+
+failure_modes:
+  recoverable:
+    - incomplete_visual_config
+    - clustering_timeout
+    - export_generation_failure
+    - prior_snapshot_missing
+  unrecoverable:
+    - invalid_graph_schema
+    - missing_required_nodes
+    - missing_required_edges
+    - corrupted_snapshot_reference
+  handling:
+    recoverable:
+      action: fallback_to_minimal_view
+    unrecoverable:
+      action: fail_and_emit_graph_error_event
+
+implementation_notes:
+  recommended_stack:
+    graph_store: neo4j_or_equivalent
+    layout_engine: graphviz_or_equivalent
+    renderer: web_graph_renderer_or_equivalent
+    vector_source: qdrant_or_equivalent
+    ledger: immudb_or_equivalent
+  separation_of_concerns:
+    - vector store keeps embeddings and nearest-neighbor retrieval
+    - graph store keeps lineage relations and display metadata
+    - ARA supplies allocation and anomaly summaries
+    - ledger stores snapshot hashes and export references
+  remarks:
+    - ベクトル本体は原則として graph store に埋め込まない
+    - Cultural Lineage Map は explanation layer であり raw scoring engine ではない
+    - overview と review 用の部分グラフを分けると扱いやすい
+    - 差分表示は period 比較に有効
+
+sample_execution:
+  input_summary:
+    period_id: "2026-04"
+    nodes:
+      - node_id: q_001
+        node_type: Question
+        label: "What makes trace-based recirculation auditable?"
+      - node_id: w_001
+        node_type: Work
+        label: "Royalty Pool Formula v0.1"
+      - node_id: s_001
+        node_type: Structure
+        label: "Permission → Trace → Resonance → Allocation"
+      - node_id: a_001
+        node_type: Allocation
+        label: "Allocation Report 2026-04"
+    edges:
+      - edge_id: e_001
+        edge_type: GENERATED
+        source: q_001
+        target: w_001
+        weight: 0.80
+      - edge_id: e_002
+        edge_type: EMBODIES_STRUCTURE
+        source: w_001
+        target: s_001
+        weight: 0.95
+      - edge_id: e_003
+        edge_type: ALLOCATED_TO
+        source: a_001
+        target: w_001
+        weight: 1.00
+        allocation_amount: 32000
+  output_summary:
+    snapshot_id: clm_2026_04_001
+    node_count: 4
+    edge_count: 3
+    dominant_view: overview
+    graph_hash: "hash_clm_2026_04_001"
+    exports:
+      - format: json
+      - format: graphviz_dot
+      - format: png
