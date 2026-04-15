@@ -125,68 +125,51 @@
         }
       }
     },
-  "resonance_score": {
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["definition", "variables"],
-  "properties": {
-    "definition": {
-      "$ref": "#/$defs/expressionOutputObject"
-    },
-    "variables": {
+    "resonance_score": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["P_i_t", "O_i_t", "A_i_t", "E_i_t", "R_i_t"],
+      "required": ["definition", "variables"],
       "properties": {
-        "P_i_t": {
+        "definition": {
+          "$ref": "#/$defs/expressionOutputObject"
+        },
+        "variables": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "description", "semantics"],
+          "required": ["P_i_t", "O_i_t", "A_i_t", "E_i_t", "R_i_t"],
           "properties": {
-            "type": {
-              "type": "string"
-            },
-            "domain": {
-              "type": "string"
-            },
-            "description": {
-              "type": "string"
-            },
-            "semantics": {
+            "P_i_t": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["1.0", "0.0", "partial"],
+              "required": ["type", "description", "semantics"],
               "properties": {
-                "1.0": {
+                "type": {
                   "type": "string"
                 },
-                "0.0": {
+                "domain": {
                   "type": "string"
                 },
-                "partial": {
+                "description": {
                   "type": "string"
+                },
+                "semantics": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["1.0", "0.0", "partial"],
+                  "properties": {
+                    "1.0": {
+                      "type": "string"
+                    },
+                    "0.0": {
+                      "type": "string"
+                    },
+                    "partial": {
+                      "type": "string"
+                    }
+                  }
                 }
               }
-            }
-          }
-        },
-        "O_i_t": {
-          "$ref": "#/$defs/variableDefinition"
-        },
-        "A_i_t": {
-          "$ref": "#/$defs/variableDefinition"
-        },
-        "E_i_t": {
-          "$ref": "#/$defs/variableDefinition"
-        },
-        "R_i_t": {
-          "$ref": "#/$defs/variableDefinition"
-        }
-      }
-    }
-  }
-},        
-            
+            },
             "O_i_t": {
               "$ref": "#/$defs/variableDefinition"
             },
