@@ -1,0 +1,761 @@
+spec:
+  id: ara-engine-v0.1
+  name: Autonomous Royalty Allocator Engine
+  short_name: ARA
+  version: "0.1.0"
+  status: draft
+  language: ja
+  objective: >
+    ARA は、permission-aware な trace records と Royalty Pool Formula に基づき、
+    起源追跡性、代理属性、共鳴強度、信頼度、時間減衰、および補正規則を考慮して、
+    監査可能な配分判断を生成する自律分配エンジンである。
+  design_principles:
+    - permission_first
+    - trace_based_allocation
+    - origin_traceability
+    - agency_attribution
+    - explainability
+    - auditability
+    - deterministic_core
+    - extensible_policy_layers
+  normative_language:
+    must:
+      - 必須条件または失敗条件を示す
+    should:
+      - 推奨条件を示す
+    may:
+      - 任意条件または拡張可能性を示す
+
+context:
+  engine_type: allocation_orchestrator
+  execution_scope:
+    - scoring
+    - allocation
+    - hold_decision
+    - anomaly_detection
+    - explanation_generation
+    - ledger_event_emission
+  upstream_dependencies:
+    - royalty-pool-formula-v0.1
+    - trace-vector-profile-v0.1
+    - permission-profile-v0.1
+  downstream_dependencies:
+    - cultural-lineage-map-v0.1
+    - trace-ledger-architecture-v0.1
+    - allocation-report-v0.1
+  accounting_unit:
+    name: QCoin
+    type: internal_non_transferable_unit
+    description: >
+      配分計算と還流計算に用いる内部会計単位。外部送金や市場価格を直接前提としない。
+
+engine_identity:
+  engine_id: ara_v0_1
+  engine_class: autonomous_royalty_allocator
+  execution_modes:
+    - batch
+    - incremental
+    - recalc
+    - dispute_resolution
+  deterministic_core: true
+  llm_assisted_explanation: optional
+  human_override:
+    supported: true
+    description: >
+      人間監査者は allocation の監査・保留・再計算要求を行える。
+      ただし元スコア、変更理由、変更者情報は必ず記録されなければならない。
+
+roles:
+  ara:
+    description: 配分判断の中核実行主体
+  policy_engine:
+    description: 許諾条件、互換条件、制限条件を評価する
+  vector_store:
+    description: 行動・意味・構造の多ベクトル検索と候補抽出を担当する
+  graph_store:
+    description: 文化系譜マップ用の関係グラフを保持する
+  audit_ledger:
+    description: 監査イベントと計算結果の固定を担当する
+  report_generator:
+    description: allocation_report と explanation_report を生成する
+  reviewer:
+    description: 保留案件や異議申立て案件を確認する人間監査者
+
+inputs:
+  required:
+    trace_batch:
+      type: object
+      description: 集計対象の痕跡バッチ
+      required_fields:
+        - trace_batch_id
+        - period_id
+        - trace_records
+    royalty_pool_context:
+      type: object
+      description: Pool 計算済みまたは計算参照可能な原資コンテキスト
+      required_fields:
+        - period_id
+        - pool_amount
+        - accounting_unit
+    permission_profile:
+      type: object
+      description: 許諾・制限・禁止条件を含むルール集合
+      required_fields:
+        - profile_id
+        - rules
+    policy_rules:
+      type: object
+      description: 起源、代理属性、保留、再計算の判断規則
+      required_fields:
+        - origin_rules
+        - agency_rules
+        - hold_rules
+    lineage_context:
+      type: object
+      description: 上流還流や派生関係を評価するための系譜情報
+      required_fields:
+        - lineage_nodes
+        - lineage_edges
+    engine_config:
+      type: object
+      description: ARA の重み、閾値、補正係数、動作モード
+      required_fields:
+        - similarity_weights
+        - confidence_threshold
+        - hold_threshold
+        - anomaly_thresholds
+  optional:
+    prior_allocations:
+      type: array
+      description: 過去期間の配分履歴
+    dispute_context:
+      type: object
+      description: 異議申立て処理時の追加情報
+    reviewer_notes:
+      type: array
+      description: 人間監査者による補足コメント
+    recomputation_reference:
+      type: object
+      description: 再計算時に参照する旧レポートや旧ハッシュ
+
+input_models:
+  trace_record:
+    type: object
+    required_fields:
+      - trace_id
+      - subject_id
+      - work_id
+      - timestamp
+      - vectors
+      - event_set
+    properties:
+      trace_id:
+        type: string
+      subject_id:
+        type: string
+      work_id:
+        type: string
+      timestamp:
+        type: string
+        format: date-time
+      vectors:
+        type: object
+        required_fields:
+          - behavior
+          - semantic
+          - structural
+        properties:
+          behavior:
+            type: array
+            item_type: float
+          semantic:
+            type: array
+            item_type: float
+          structural:
+            type: array
+            item_type: float
+      event_set:
+        type: array
+        item_type: event_record
+      metadata:
+        type: object
+        additional_properties: true
+
+  event_record:
+    type: object
+    required_fields:
+      - event_id
+      - event_type
+      - timestamp
+    properties:
+      event_id:
+        type: string
+      event_type:
+        type: string
+        allowed_values:
+          - view
+          - summarize
+          - quote
+          - transform
+          - generate_with_dependence
+          - edit
+          - reuse_structure
+      timestamp:
+        type: string
+        format: date-time
+      weight_override:
+        type: float
+      tokens:
+        type: integer
+      repeat_count:
+        type: integer
+      confidence_hint:
+        type: float
+      metadata:
+        type: object
+        additional_properties: true
+
+processing_model:
+  execution_order:
+    - receive
+    - validate_inputs
+    - resolve_permission
+    - retrieve_candidates
+    - compute_similarity
+    - apply_reliability_filters
+    - evaluate_origin_and_agency
+    - compute_resonance_scores
+    - normalize_shares
+    - compute_allocations
+    - compute_recirculation
+    - detect_anomalies
+    - generate_reports
+    - emit_ledger_events
+  state_machine:
+    states:
+      - RECEIVED
+      - VALIDATED
+      - PERMISSION_RESOLVED
+      - CANDIDATES_RETRIEVED
+      - SCORED
+      - HELD
+      - ALLOCATED
+      - RECIRCULATED
+      - REPORTED
+      - COMMITTED
+      - FAILED
+    transitions:
+      - from: RECEIVED
+        to: VALIDATED
+        when: input_schema_valid
+      - from: VALIDATED
+        to: PERMISSION_RESOLVED
+        when: permission_inputs_available
+      - from: PERMISSION_RESOLVED
+        to: CANDIDATES_RETRIEVED
+        when: candidate_retrieval_successful
+      - from: CANDIDATES_RETRIEVED
+        to: SCORED
+        when: scoring_completed
+      - from: SCORED
+        to: HELD
+        when: hold_condition_triggered
+      - from: SCORED
+        to: ALLOCATED
+        when: allocation_conditions_satisfied
+      - from: ALLOCATED
+        to: RECIRCULATED
+        when: recirculation_enabled
+      - from: ALLOCATED
+        to: REPORTED
+        when: recirculation_disabled
+      - from: RECIRCULATED
+        to: REPORTED
+        when: reports_generated
+      - from: REPORTED
+        to: COMMITTED
+        when: ledger_commit_successful
+      - from: "*"
+        to: FAILED
+        when: unrecoverable_error
+
+candidate_retrieval:
+  objective: >
+    trace_batch 内の各 trace に対して、比較対象となる起源候補や派生候補を取得する。
+  source_layers:
+    - vector_store
+    - lineage_context
+    - prior_allocations
+  strategy:
+    multi_vector_retrieval: true
+    retrieval_layers:
+      - behavior
+      - semantic
+      - structural
+    top_k_defaults:
+      behavior: 10
+      semantic: 20
+      structural: 10
+    deduplicate_candidates: true
+    merge_strategy: weighted_union
+  output:
+    name: candidate_set
+    description: trace ごとの評価対象候補集合
+
+scoring:
+  similarity:
+    objective: >
+      行動・意味・構造の3層ベクトルから各候補との類似度を算出する。
+    formula:
+      expression: >
+        Similarity_i_e =
+        alpha * SimBehavior_i_e +
+        beta * SimSemantic_i_e +
+        gamma * SimStructure_i_e
+    defaults:
+      alpha: 0.15
+      beta: 0.55
+      gamma: 0.30
+    constraints:
+      - alpha + beta + gamma = 1
+      - alpha >= 0
+      - beta >= 0
+      - gamma >= 0
+
+  event_scoring:
+    objective: >
+      イベント種別、類似度、信頼度、鮮度補正からイベント単位の有効スコアを算出する。
+    formula:
+      expression: >
+        EventScore_i_e =
+        EventWeight_e *
+        Similarity_i_e *
+        Confidence_i_e *
+        Decay_i_e
+    default_event_weights:
+      view: 0.20
+      summarize: 0.50
+      quote: 0.70
+      transform: 0.90
+      generate_with_dependence: 1.00
+      edit: 0.60
+      reuse_structure: 0.80
+
+  bias_controls:
+    enabled_by_default: false
+    objective: 長さ偏重、反復連打、不確実性の高い推定を抑制する
+    formulas:
+      length_penalty:
+        expression: "L_i_e = 1 / (1 + lambda * log(1 + tokens_i_e))"
+      repetition_penalty:
+        expression: "N_i_e = 1 / (1 + mu * repeat_i_e)"
+      uncertainty_penalty:
+        expression: "U_i_e = 1 - sigma_i_e"
+      extended_event_score:
+        expression: >
+          EventScore_i_e =
+          EventWeight_e *
+          Similarity_i_e *
+          Confidence_i_e *
+          Decay_i_e *
+          L_i_e *
+          N_i_e *
+          U_i_e
+    default_parameters:
+      lambda: 0.10
+      mu: 0.25
+
+  policy_gates:
+    objective: >
+      許諾、起源明確性、代理属性明確性の係数を適用し、
+      配分可能な寄与のみを残す。
+    formula:
+      expression: >
+        R_i_t =
+        P_i_t * O_i_t * A_i_t *
+        sum_e_in_E_i_t(EventScore_i_e)
+    coefficient_semantics:
+      P_i_t:
+        description: 許諾係数
+        values:
+          permitted: 1.0
+          restricted: between_0_and_1
+          prohibited: 0.0
+      O_i_t:
+        description: 起源追跡係数
+        values:
+          clear: 1.0
+          uncertain: between_0_and_1
+          unknown: 0.0
+      A_i_t:
+        description: 代理属性係数
+        values:
+          clear: 1.0
+          uncertain: between_0_and_1
+          unknown: 0.0
+
+allocation:
+  objective: >
+    計算済みの寄与スコアを正規化し、対象期間の Pool を比例配分する。
+  formulas:
+    share:
+      expression: "Share_i_t = R_i_t / sum_j(R_j_t)"
+    amount:
+      expression: "Allocation_i_t = Pool_t * Share_i_t"
+  constraints:
+    - sum_i(Share_i_t) = 1 when sum_j(R_j_t) > 0
+    - Allocation_i_t = 0 when Pool_t = 0
+    - Allocation_i_t = 0 when R_i_t = 0
+  minimum_payout:
+    enabled: true
+    threshold: 1.0
+    unit: QCoin
+    rule: >
+      最終配分額が閾値未満の候補は immediate payout せず、
+      micro_pool へ繰り越してもよい。
+  rounding_policy:
+    method: bankers_rounding
+    decimals: 4
+
+recirculation:
+  enabled: false
+  objective: >
+    派生構造から上流構造へ一定割合を還流する。
+  formulas:
+    direct:
+      expression: "Direct_i_t = (1 - rho_i) * Allocation0_i_t"
+    upstream:
+      expression: >
+        Upstream_k_t =
+        sum_i(rho_i * Allocation0_i_t * lineage_i_to_k)
+  defaults:
+    rho_i: 0.10
+  constraints:
+    - sum_k(lineage_i_to_k) = 1
+  application_order:
+    - compute_primary_allocation
+    - split_direct_and_upstream
+    - aggregate_upstream_amounts
+    - emit_recirculation_records
+
+hold_rules:
+  objective: >
+    自動確定に適さない案件を保留し、人間監査または再計算対象へ回す。
+  triggers:
+    - name: permission_unknown
+      condition: permission_status == unknown
+      action: hold
+    - name: origin_unknown
+      condition: O_i_t == 0
+      action: hold_or_zero
+    - name: agency_unknown
+      condition: A_i_t == 0
+      action: hold_or_zero
+    - name: low_confidence
+      condition: mean_confidence < confidence_threshold
+      action: hold
+    - name: anomaly_detected
+      condition: anomaly_score >= anomaly_threshold
+      action: hold
+    - name: dispute_open
+      condition: dispute_context.present == true
+      action: hold
+  outputs:
+    hold_report:
+      required_fields:
+        - hold_id
+        - trace_batch_id
+        - reasons
+        - affected_candidates
+        - reviewer_required
+
+recalculation:
+  enabled: true
+  objective: >
+    新たな許諾情報、異議申立て、モデル更新、系譜更新があった場合に再計算する。
+  triggers:
+    - policy_rule_changed
+    - lineage_context_updated
+    - dispute_resolved
+    - trace_record_corrected
+    - reviewer_requested_recalc
+  requirements:
+    - previous_report_reference_must_be_preserved
+    - delta_explanation_must_be_generated
+    - recalculation_event_must_be_written_to_ledger
+  modes:
+    full_recompute:
+      description: 全候補を再計算する
+    delta_recompute:
+      description: 影響のある候補のみ再計算する
+
+anomaly_detection:
+  objective: >
+    不自然な反復、過剰集中、自己参照濫用、短時間の異常入力増加を検知する。
+  indicators:
+    repetition_spike:
+      description: 近似入力や同系統イベントの急増
+    concentration_spike:
+      description: 特定主体への異常なスコア集中
+    provenance_gap:
+      description: 起源が薄いのに高得点
+    agency_gap:
+      description: 代理主体が曖昧なのに高得点
+    structural_copy_pattern:
+      description: 構造一致が極端に高く独自寄与が薄い
+  anomaly_score:
+    range: "[0,1]"
+    thresholds:
+      warn: 0.60
+      hold: 0.75
+      escalate: 0.90
+  actions:
+    warn:
+      description: explanation_report に警告を付与
+    hold:
+      description: 自動配分を停止し保留へ移行
+    escalate:
+      description: 人間監査者へ通知し再計算対象にする
+
+explanation:
+  objective: >
+    配分判断の理由を、人間にも機械にも読める形で出力する。
+  outputs:
+    machine_explanation:
+      format: structured_json_like
+      fields:
+        - candidate_id
+        - similarity_breakdown
+        - policy_coefficients
+        - confidence_summary
+        - decay_summary
+        - anomaly_summary
+        - final_score
+        - final_share
+        - final_allocation
+    human_explanation:
+      format: narrative_text
+      requirements:
+        - 上位因子を明示する
+        - 主要な減衰要因を明示する
+        - 保留理由があれば記載する
+        - 再計算時は差分理由を明示する
+  llm_assistance:
+    allowed: true
+    conditions:
+      - 数値結果を変更してはならない
+      - narrative generation のみ補助可能
+      - 元データ参照と出力ハッシュを保持する
+
+outputs:
+  allocation_report:
+    type: object
+    required_fields:
+      - report_id
+      - period_id
+      - pool_amount
+      - accounting_unit
+      - candidate_results
+      - total_allocated
+      - report_hash
+    candidate_result_fields:
+      - candidate_id
+      - resonance_score
+      - share
+      - allocation_amount
+      - permission_factor
+      - origin_factor
+      - agency_factor
+      - status
+  hold_report:
+    type: object
+    required_fields:
+      - hold_id
+      - reasons
+      - trace_batch_id
+      - affected_candidates
+      - created_at
+  anomaly_report:
+    type: object
+    required_fields:
+      - anomaly_report_id
+      - anomaly_items
+      - severity
+      - recommended_action
+  explanation_report:
+    type: object
+    required_fields:
+      - explanation_report_id
+      - machine_explanations
+      - human_summary
+  ledger_events:
+    type: array
+    item_type: ledger_event
+
+ledger_integration:
+  required_event_types:
+    - TRACE_BATCH_RECEIVED
+    - PERMISSION_EVALUATED
+    - ARA_SCORING_COMPLETED
+    - ALLOCATION_COMPUTED
+    - RECIRCULATION_COMPUTED
+    - HOLD_ASSIGNED
+    - ANOMALY_FLAGGED
+    - REPORT_GENERATED
+    - ALLOCATION_COMMITTED
+    - RECALC_EXECUTED
+  minimum_ledger_event:
+    required_fields:
+      - event_id
+      - event_type
+      - timestamp
+      - actor_id
+      - payload_ref
+      - previous_hash
+      - current_hash
+  commit_policy:
+    description: >
+      allocation_report と explanation_report の生成後に commit する。
+      hold 案件も hold_report とともに ledger へ書き込む。
+
+security_and_privacy:
+  data_minimization:
+    description: >
+      ARA は raw content を恒久保存の前提とせず、必要最小限の trace metadata と
+      score-related data を扱うべきである。
+  pii_policy:
+    description: >
+      個人識別情報を扱う場合は別途 privacy policy を適用し、
+      配分に不要な情報は除外またはマスクする。
+  model_integrity:
+    description: >
+      similarity weights、policy coefficients、thresholds の変更は
+      versioned config として記録されなければならない。
+  tamper_evidence:
+    description: >
+      output reports と ledger events は hash 参照を持つべきである。
+
+configuration:
+  default_similarity_weights:
+    alpha: 0.15
+    beta: 0.55
+    gamma: 0.30
+  default_thresholds:
+    confidence_threshold: 0.50
+    hold_threshold: 0.40
+    anomaly_warn_threshold: 0.60
+    anomaly_hold_threshold: 0.75
+    anomaly_escalate_threshold: 0.90
+  default_retrieval:
+    top_k_behavior: 10
+    top_k_semantic: 20
+    top_k_structural: 10
+  default_runtime:
+    mode: batch
+    bias_controls_enabled: false
+    recirculation_enabled: false
+    llm_assisted_explanation: false
+
+validation:
+  hard_rules:
+    - name: inputs_must_be_present
+      expression: >
+        trace_batch != null and
+        royalty_pool_context != null and
+        permission_profile != null and
+        policy_rules != null and
+        engine_config != null
+    - name: similarity_weights_must_normalize
+      expression: alpha + beta + gamma = 1
+    - name: pool_amount_must_be_non_negative
+      expression: pool_amount >= 0
+    - name: coefficients_must_be_bounded
+      expression: >
+        0 <= P_i_t <= 1 and
+        0 <= O_i_t <= 1 and
+        0 <= A_i_t <= 1
+    - name: shares_must_normalize
+      expression: sum_i(Share_i_t) = 1 when sum_j(R_j_t) > 0
+    - name: allocations_must_be_non_negative
+      expression: Allocation_i_t >= 0
+  soft_rules:
+    - name: explanation_should_exist
+      expression: explanation_report should be generated
+    - name: hold_should_be_explained
+      expression: hold_report should contain reasons
+    - name: recalculation_should_reference_previous
+      expression: recalculation should reference prior report
+
+failure_modes:
+  recoverable:
+    - candidate_retrieval_timeout
+    - explanation_generation_failure
+    - temporary_vector_store_unavailable
+    - delayed_ledger_commit
+  unrecoverable:
+    - invalid_input_schema
+    - missing_pool_amount
+    - corrupted_trace_batch
+    - invalid_policy_config
+  handling:
+    recoverable:
+      action: retry_or_hold
+    unrecoverable:
+      action: fail_and_emit_error_event
+
+implementation_notes:
+  recommended_stack:
+    vector_retrieval: qdrant_or_equivalent
+    graph_mapping: neo4j_or_equivalent
+    audit_ledger: immudb_or_equivalent
+    event_stream: kafka_or_equivalent
+  separation_of_concerns:
+    - vector_store handles candidate search
+    - ARA handles scoring and allocation
+    - graph_store handles lineage visualization
+    - ledger handles immutable audit trail
+  remarks:
+    - ARA は scoring engine であると同時に allocation orchestrator である
+    - 数値計算の核は deterministic であるべき
+    - LLM は説明生成に限定して補助利用してもよい
+    - human override は可能だが差分記録が必須
+
+sample_execution:
+  input_summary:
+    trace_batch_id: tb_2026_04_001
+    period_id: "2026-04"
+    pool_amount: 80000
+    accounting_unit: QCoin
+    candidates:
+      - candidate_id: origin_1
+        permission_factor: 1.0
+        origin_factor: 1.0
+        agency_factor: 1.0
+        aggregated_score: 40
+      - candidate_id: origin_2
+        permission_factor: 1.0
+        origin_factor: 1.0
+        agency_factor: 1.0
+        aggregated_score: 35
+      - candidate_id: origin_3
+        permission_factor: 1.0
+        origin_factor: 1.0
+        agency_factor: 1.0
+        aggregated_score: 25
+  output_summary:
+    allocations:
+      - candidate_id: origin_1
+        share: 0.40
+        allocation_amount: 32000
+        status: allocated
+      - candidate_id: origin_2
+        share: 0.35
+        allocation_amount: 28000
+        status: allocated
+      - candidate_id: origin_3
+        share: 0.25
+        allocation_amount: 20000
+        status: allocated
+    hold_count: 0
+    anomaly_count: 0
+    committed: true
