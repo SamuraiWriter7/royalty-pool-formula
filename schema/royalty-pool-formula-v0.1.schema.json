@@ -186,7 +186,7 @@
     }
   }
 }
-              ]
+              
             },
             "O_i_t": {
               "$ref": "#/$defs/variableDefinition"
