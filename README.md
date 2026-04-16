@@ -57,7 +57,7 @@ This repository is organized around the following logic:
 ```text
 .
 ├─ README.md
-├─ LICENSE-KAZENE-ROYALTY-CORE
+├─ LICENSE
 ├─ CITATION.cff
 ├─ docs/
 │  └─ one-page-overview.md
@@ -66,6 +66,7 @@ This repository is organized around the following logic:
 ├─ examples/
 │  └─ royalty-pool-formula-v0.1.sample.yaml
 ├─ spec/
+│  ├─ trace-vector-profile-v0.1.yaml
 │  ├─ ara-engine-v0.1.yaml
 │  ├─ cultural-lineage-map-v0.1.yaml
 │  └─ trace-ledger-architecture-v0.1.yaml
