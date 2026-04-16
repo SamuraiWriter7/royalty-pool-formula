@@ -2,12 +2,13 @@ spec:
   id: ara-engine-v0.1
   name: Autonomous Royalty Allocator Engine
   short_name: ARA
-  version: "0.1.0"
+  version: "0.1.1"
   status: draft
   language: ja
   objective: >
-    ARA は、permission-aware な trace records と Royalty Pool Formula に基づき、
-    起源追跡性、代理属性、共鳴強度、信頼度、時間減衰、および補正規則を考慮して、
+    ARA は、permission-aware な trace records と Trace Vector Profile、
+    Royalty Pool Formula に基づき、起源追跡性、代理属性、共鳴強度、
+    信頼度、時間減衰、および補正規則を考慮して、
     監査可能な配分判断を生成する自律分配エンジンである。
   design_principles:
     - permission_first
@@ -18,6 +19,7 @@ spec:
     - auditability
     - deterministic_core
     - extensible_policy_layers
+    - vector_profile_compatibility
   normative_language:
     must:
       - 必須条件または失敗条件を示す
@@ -48,6 +50,11 @@ context:
     type: internal_non_transferable_unit
     description: >
       配分計算と還流計算に用いる内部会計単位。外部送金や市場価格を直接前提としない。
+  trace_vector_contract:
+    description: >
+      ARA は単一の可変長ベクトルではなく、
+      Trace Vector Profile v0.1 に定義された
+      behavior / semantic / structural の named vectors と scalar_features を前提に動作する。
 
 engine_identity:
   engine_id: ara_v0_1
@@ -71,7 +78,7 @@ roles:
   policy_engine:
     description: 許諾条件、互換条件、制限条件を評価する
   vector_store:
-    description: 行動・意味・構造の多ベクトル検索と候補抽出を担当する
+    description: Trace Vector Profile に準拠した named vectors の検索と候補抽出を担当する
   graph_store:
     description: 文化系譜マップ用の関係グラフを保持する
   audit_ledger:
@@ -90,6 +97,14 @@ inputs:
         - trace_batch_id
         - period_id
         - trace_records
+    trace_vector_profile:
+      type: object
+      description: Trace Vector Profile v0.1 に準拠した profile 定義
+      required_fields:
+        - profile_id
+        - profile_version
+        - dimension_profile
+        - normalization_profile
     royalty_pool_context:
       type: object
       description: Pool 計算済みまたは計算参照可能な原資コンテキスト
@@ -146,7 +161,7 @@ input_models:
       - subject_id
       - work_id
       - timestamp
-      - vectors
+      - trace_vector_record
       - event_set
     properties:
       trace_id:
@@ -158,22 +173,59 @@ input_models:
       timestamp:
         type: string
         format: date-time
-      vectors:
+      trace_vector_record:
         type: object
+        description: Trace Vector Profile v0.1 に準拠した多ベクトル記録
         required_fields:
-          - behavior
-          - semantic
-          - structural
+          - trace_vector_id
+          - profile_version
+          - dimension_profile
+          - vectors
+          - scalar_features
+          - normalization_profile
+          - encoder_versions
         properties:
-          behavior:
-            type: array
-            item_type: float
-          semantic:
-            type: array
-            item_type: float
-          structural:
-            type: array
-            item_type: float
+          trace_vector_id:
+            type: string
+          profile_version:
+            type: string
+          dimension_profile:
+            type: object
+            required_fields:
+              - behavior_dimension
+              - semantic_dimension
+              - structural_dimension
+          vectors:
+            type: object
+            required_fields:
+              - behavior
+              - semantic
+              - structural
+            properties:
+              behavior:
+                type: array
+                item_type: float
+              semantic:
+                type: array
+                item_type: float
+              structural:
+                type: array
+                item_type: float
+          scalar_features:
+            type: object
+            additional_properties: true
+          normalization_profile:
+            type: object
+            additional_properties: true
+          encoder_versions:
+            type: object
+            required_fields:
+              - behavior_encoder_version
+              - semantic_encoder_version
+              - structural_encoder_version
+          metadata:
+            type: object
+            additional_properties: true
       event_set:
         type: array
         item_type: event_record
@@ -219,6 +271,7 @@ processing_model:
   execution_order:
     - receive
     - validate_inputs
+    - validate_trace_vector_profile
     - resolve_permission
     - retrieve_candidates
     - compute_similarity
@@ -235,6 +288,7 @@ processing_model:
     states:
       - RECEIVED
       - VALIDATED
+      - PROFILE_VALIDATED
       - PERMISSION_RESOLVED
       - CANDIDATES_RETRIEVED
       - SCORED
@@ -249,6 +303,9 @@ processing_model:
         to: VALIDATED
         when: input_schema_valid
       - from: VALIDATED
+        to: PROFILE_VALIDATED
+        when: trace_vector_profile_compatible
+      - from: PROFILE_VALIDATED
         to: PERMISSION_RESOLVED
         when: permission_inputs_available
       - from: PERMISSION_RESOLVED
@@ -279,9 +336,41 @@ processing_model:
         to: FAILED
         when: unrecoverable_error
 
+trace_vector_profile_contract:
+  required_profile_id: trace-vector-profile-v0.1
+  required_named_vectors:
+    - behavior
+    - semantic
+    - structural
+  compatibility_checks:
+    - profile_version_must_be_present
+    - dimension_profile_must_be_present
+    - normalization_profile_must_be_present
+    - encoder_versions_must_be_present
+    - named_vector_keys_must_match
+  default_dimension_profile:
+    behavior_dimension: 128
+    semantic_dimension: 1024
+    structural_dimension: 128
+  missing_layer_policy:
+    behavior_missing:
+      action: allow_with_penalty
+      explanation: 行動層欠損は減衰つきで許容
+    semantic_missing:
+      action: hold_or_fail
+      explanation: semantic layer は通常支配的なので欠損は重い
+    structural_missing:
+      action: allow_with_penalty
+      explanation: 構造層欠損は減衰つきで許容
+  versioning_rules:
+    - incompatible_dimension_profiles_must_not_be_silently_compared
+    - normalization_profile_changes_must_be_recorded
+    - embedding_model_changes_must_be_recorded
+
 candidate_retrieval:
   objective: >
     trace_batch 内の各 trace に対して、比較対象となる起源候補や派生候補を取得する。
+    retrieval は Trace Vector Profile v0.1 の named vectors を前提とする。
   source_layers:
     - vector_store
     - lineage_context
@@ -298,6 +387,9 @@ candidate_retrieval:
       structural: 10
     deduplicate_candidates: true
     merge_strategy: weighted_union
+    compatibility_requirement: >
+      retrieval に使う候補は、比較対象 trace と互換な
+      dimension_profile / normalization_profile を持つべきである。
   output:
     name: candidate_set
     description: trace ごとの評価対象候補集合
@@ -305,7 +397,14 @@ candidate_retrieval:
 scoring:
   similarity:
     objective: >
-      行動・意味・構造の3層ベクトルから各候補との類似度を算出する。
+      Trace Vector Profile v0.1 に基づく三層ベクトルから各候補との類似度を算出する。
+    layerwise_metrics:
+      behavior_similarity:
+        metric: cosine_similarity
+      semantic_similarity:
+        metric: cosine_similarity
+      structural_similarity:
+        metric: cosine_similarity
     formula:
       expression: >
         Similarity_i_e =
@@ -321,6 +420,29 @@ scoring:
       - alpha >= 0
       - beta >= 0
       - gamma >= 0
+      - semantic_weight_should_be_highest_in_default_profile
+
+  scalar_adjustments:
+    objective: >
+      Trace Vector Profile の scalar_features を用いて similarity や confidence の補助補正を行う。
+    supported_features:
+      - confidence_hint
+      - uncertainty_hint
+      - revision_depth
+      - noise_ratio_estimate
+      - origin_clarity_hint
+      - agency_clarity_hint
+      - citation_density
+      - provenance_gap_hint
+      - outline_depth
+      - reuse_count
+      - originality_hint
+      - structural_consistency
+      - recency_score
+    usage_policy:
+      description: >
+        scalar_features は similarity の代替ではなく補助要因である。
+        これ単独で配分を決定してはならない。
 
   event_scoring:
     objective: >
@@ -451,6 +573,12 @@ hold_rules:
     - name: agency_unknown
       condition: A_i_t == 0
       action: hold_or_zero
+    - name: semantic_layer_missing
+      condition: trace_vector_record.vectors.semantic == null
+      action: hold_or_fail
+    - name: incompatible_profile
+      condition: profile_compatibility == false
+      action: hold_or_fail
     - name: low_confidence
       condition: mean_confidence < confidence_threshold
       action: hold
@@ -472,13 +600,15 @@ hold_rules:
 recalculation:
   enabled: true
   objective: >
-    新たな許諾情報、異議申立て、モデル更新、系譜更新があった場合に再計算する。
+    新たな許諾情報、異議申立て、モデル更新、系譜更新、trace vector profile 更新があった場合に再計算する。
   triggers:
     - policy_rule_changed
     - lineage_context_updated
     - dispute_resolved
     - trace_record_corrected
     - reviewer_requested_recalc
+    - trace_vector_profile_updated
+    - normalization_profile_changed
   requirements:
     - previous_report_reference_must_be_preserved
     - delta_explanation_must_be_generated
@@ -503,6 +633,8 @@ anomaly_detection:
       description: 代理主体が曖昧なのに高得点
     structural_copy_pattern:
       description: 構造一致が極端に高く独自寄与が薄い
+    profile_mismatch:
+      description: 異なる次元・正規化・version を無理に比較している
   anomaly_score:
     range: "[0,1]"
     thresholds:
@@ -525,7 +657,13 @@ explanation:
       format: structured_json_like
       fields:
         - candidate_id
+        - trace_vector_ref
+        - profile_version
+        - dimension_profile
+        - active_layers
+        - missing_layers
         - similarity_breakdown
+        - scalar_feature_summary
         - policy_coefficients
         - confidence_summary
         - decay_summary
@@ -538,6 +676,8 @@ explanation:
       requirements:
         - 上位因子を明示する
         - 主要な減衰要因を明示する
+        - どの層が主に効いたかを示す
+        - 欠損レイヤーがあれば記載する
         - 保留理由があれば記載する
         - 再計算時は差分理由を明示する
   llm_assistance:
@@ -560,6 +700,8 @@ outputs:
       - report_hash
     candidate_result_fields:
       - candidate_id
+      - trace_vector_ref
+      - profile_version
       - resonance_score
       - share
       - allocation_amount
@@ -595,6 +737,7 @@ outputs:
 ledger_integration:
   required_event_types:
     - TRACE_BATCH_RECEIVED
+    - TRACE_VECTOR_PROFILE_VALIDATED
     - PERMISSION_EVALUATED
     - ARA_SCORING_COMPLETED
     - ALLOCATION_COMPUTED
@@ -621,15 +764,16 @@ ledger_integration:
 security_and_privacy:
   data_minimization:
     description: >
-      ARA は raw content を恒久保存の前提とせず、必要最小限の trace metadata と
-      score-related data を扱うべきである。
+      ARA は raw content を恒久保存の前提とせず、必要最小限の trace metadata、
+      trace vector refs、score-related data を扱うべきである。
   pii_policy:
     description: >
       個人識別情報を扱う場合は別途 privacy policy を適用し、
       配分に不要な情報は除外またはマスクする。
   model_integrity:
     description: >
-      similarity weights、policy coefficients、thresholds の変更は
+      similarity weights、policy coefficients、thresholds、
+      trace-vector-profile compatibility rules の変更は
       versioned config として記録されなければならない。
   tamper_evidence:
     description: >
@@ -655,12 +799,19 @@ configuration:
     bias_controls_enabled: false
     recirculation_enabled: false
     llm_assisted_explanation: false
+  default_trace_vector_profile:
+    profile_id: trace-vector-profile-v0.1
+    profile_version: "0.1.0"
+    behavior_dimension: 128
+    semantic_dimension: 1024
+    structural_dimension: 128
 
 validation:
   hard_rules:
     - name: inputs_must_be_present
       expression: >
         trace_batch != null and
+        trace_vector_profile != null and
         royalty_pool_context != null and
         permission_profile != null and
         policy_rules != null and
@@ -678,6 +829,19 @@ validation:
       expression: sum_i(Share_i_t) = 1 when sum_j(R_j_t) > 0
     - name: allocations_must_be_non_negative
       expression: Allocation_i_t >= 0
+    - name: trace_vector_profile_must_match_contract
+      expression: >
+        required named vectors exist and
+        profile_version exists and
+        normalization_profile exists
+    - name: vector_dimensions_must_match_profile
+      expression: >
+        len(behavior_vector) = behavior_dimension and
+        len(semantic_vector) = semantic_dimension and
+        len(structural_vector) = structural_dimension
+    - name: incompatible_profiles_must_not_be_silently_compared
+      expression: >
+        comparison requires compatible dimension_profile and normalization_profile
   soft_rules:
     - name: explanation_should_exist
       expression: explanation_report should be generated
@@ -692,11 +856,16 @@ failure_modes:
     - explanation_generation_failure
     - temporary_vector_store_unavailable
     - delayed_ledger_commit
+    - missing_behavior_layer
+    - missing_structural_layer
   unrecoverable:
     - invalid_input_schema
     - missing_pool_amount
     - corrupted_trace_batch
     - invalid_policy_config
+    - semantic_vector_missing_in_standard_profile
+    - dimension_mismatch
+    - incompatible_profile_versions_compared_as_if_equal
   handling:
     recoverable:
       action: retry_or_hold
@@ -710,7 +879,7 @@ implementation_notes:
     audit_ledger: immudb_or_equivalent
     event_stream: kafka_or_equivalent
   separation_of_concerns:
-    - vector_store handles candidate search
+    - vector_store handles candidate search using named vectors
     - ARA handles scoring and allocation
     - graph_store handles lineage visualization
     - ledger handles immutable audit trail
@@ -719,6 +888,7 @@ implementation_notes:
     - 数値計算の核は deterministic であるべき
     - LLM は説明生成に限定して補助利用してもよい
     - human override は可能だが差分記録が必須
+    - Trace Vector Profile と噛み合わない ARA は、綺麗に動いているようで芯がぶれる
 
 sample_execution:
   input_summary:
@@ -726,6 +896,13 @@ sample_execution:
     period_id: "2026-04"
     pool_amount: 80000
     accounting_unit: QCoin
+    trace_vector_profile:
+      profile_id: trace-vector-profile-v0.1
+      profile_version: "0.1.0"
+      dimensions:
+        behavior: 128
+        semantic: 1024
+        structural: 128
     candidates:
       - candidate_id: origin_1
         permission_factor: 1.0
