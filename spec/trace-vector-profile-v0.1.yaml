@@ -1,0 +1,609 @@
+spec:
+  id: trace-vector-profile-v0.1
+  name: Trace Vector Profile
+  short_name: TVP
+  version: "0.1.0"
+  status: draft
+  language: ja
+  objective: >
+    Trace Vector Profile は、痕跡を行動・意味・構造の三層で表現し、
+    ARA による scoring / allocation / recirculation の入力として安定利用できる
+    多ベクトル表現を定義する仕様である。
+    本仕様は、単一の可変長ベクトルではなく、固定次元の複数ベクトルと
+    補助スカラー特徴を組み合わせることで、比較可能性、検索可能性、
+    説明可能性、バージョン管理容易性を確保する。
+  design_principles:
+    - multi_vector_not_single_variable_vector
+    - fixed_dimension_per_layer
+    - separation_of_behavior_semantics_structure
+    - retrieval_friendly
+    - scoring_friendly
+    - explainability
+    - versionability
+    - missing_tolerance
+  normative_language:
+    must:
+      - 必須条件または違反条件を示す
+    should:
+      - 推奨条件を示す
+    may:
+      - 任意条件または拡張可能性を示す
+
+context:
+  representation_model: multi_vector_profile
+  primary_purpose:
+    - candidate_retrieval
+    - resonance_scoring
+    - allocation_support
+    - recirculation_support
+    - explainability_support
+  upstream_dependencies:
+    - trace-capture-process-v0.1
+    - permission-profile-v0.1
+  downstream_dependencies:
+    - ara-engine-v0.1
+    - cultural-lineage-map-v0.1
+    - trace-ledger-architecture-v0.1
+  core_statement: >
+    痕跡ベクトルは「一本の可変長ベクトル」ではなく、
+    行動・意味・構造という異なる寄与位相を
+    それぞれ固定次元ベクトルとして保持し、
+    後段の similarity 計算と policy-aware scoring で統合される。
+
+profile_identity:
+  profile_id_prefix: tvp
+  profile_type: multi_layer_trace_vector
+  compatibility_mode:
+    supports_backward_compatible_extension: true
+    requires_versioned_dimensions: true
+  vector_storage_policy:
+    primary_store: vector_store
+    graph_store_contains_vectors: false
+    ledger_store_contains_vectors: false
+    description: >
+      ベクトル本体は原則として vector store に保持し、
+      graph store と ledger には参照情報、要約情報、hash、explanation 用の
+      派生メタデータのみを保持する。
+
+roles:
+  trace_encoder:
+    description: raw traces から行動・意味・構造ベクトルを生成する
+  feature_extractor:
+    description: スカラー特徴や補助メタデータを抽出する
+  vector_store:
+    description: named vectors と近傍検索を保持・提供する
+  ara:
+    description: similarity 計算と配分判断を行う
+  graph_service:
+    description: 系譜可視化用に関係要約を生成する
+  ledger_service:
+    description: hash と version 情報を記録する
+  reviewer:
+    description: 痕跡表現と scoring breakdown を監査する
+
+profile_model:
+  structure:
+    description: >
+      各 trace record は、複数の固定次元ベクトルと補助スカラー群から構成される。
+    required_components:
+      - behavior_vector
+      - semantic_vector
+      - structural_vector
+      - scalar_features
+      - vector_version_info
+      - normalization_profile
+  representation_units:
+    vector_unit: float_array
+    scalar_unit: numeric_or_categorical_summary
+    reference_unit: string_or_hash_reference
+
+dimensions:
+  policy:
+    description: >
+      各層の次元数は profile version ごとに固定されるべきであり、
+      同一 version 内では変更してはならない。
+    fixed_within_version: true
+    change_requires_new_version: true
+  defaults:
+    behavior_vector:
+      dimension: 128
+      rationale: >
+        行動痕跡は初期版では低〜中次元で十分。
+        量ではなく質的パターンを中心に保持する。
+    semantic_vector:
+      dimension: 1024
+      rationale: >
+        意味・思想層は埋め込みモデル依存だが、
+        初期版では 1024 次元を標準値とする。
+    structural_vector:
+      dimension: 128
+      rationale: >
+        構造寄与は文章・思想の型を抽象化した低〜中次元表現とする。
+  allowed_profiles:
+    compact:
+      behavior_dimension: 64
+      semantic_dimension: 768
+      structural_dimension: 64
+    standard:
+      behavior_dimension: 128
+      semantic_dimension: 1024
+      structural_dimension: 128
+    extended:
+      behavior_dimension: 256
+      semantic_dimension: 1536
+      structural_dimension: 256
+
+layers:
+  behavior_layer:
+    name: Behavior Trace Layer
+    objective: >
+      ユーザーまたは主体の操作・介入・反復・編集の質的パターンを表現する。
+    representation:
+      vector_name: behavior_vector
+      fixed_dimension: 128
+      storage_key: vectors.behavior
+    semantic_scope:
+      - interaction_pattern
+      - revision_density
+      - intervention_timing
+      - sequence_regularity
+      - edit_locality
+      - contribution_persistence
+    recommended_feature_sources:
+      - prompt_edit_sequences
+      - revision_events
+      - operation_intervals
+      - structural_edit_spans
+      - reuse_actions
+    non_goals:
+      - raw click counting as dominant signal
+      - pure activity quantity reward
+    explanation_targets:
+      - どの程度介入したか
+      - どのくらい連続して編集したか
+      - 構造変更にどれだけ関与したか
+
+  semantic_layer:
+    name: Semantic / Ideation Layer
+    objective: >
+      問い、指示、思想、概念、意味的方向性を表現する。
+    representation:
+      vector_name: semantic_vector
+      fixed_dimension: 1024
+      storage_key: vectors.semantic
+    semantic_scope:
+      - inquiry_direction
+      - abstraction_level
+      - conceptual_reference
+      - argumentative_bias
+      - ideological_shape
+      - theme_dependency
+    recommended_feature_sources:
+      - prompt_text
+      - question_text
+      - comments
+      - summary_text
+      - concept_labels
+    embedding_policy:
+      model_defined_dimension: true
+      version_must_record_model: true
+      requires_normalization: true
+    explanation_targets:
+      - どの問いに近いか
+      - どの概念群と共鳴したか
+      - 抽象度や思想方向がどれほど近いか
+
+  structural_layer:
+    name: Structural Contribution Layer
+    objective: >
+      論理構造、章立て、フレーム、構文型、再利用された構造パターンを表現する。
+    representation:
+      vector_name: structural_vector
+      fixed_dimension: 128
+      storage_key: vectors.structural
+    semantic_scope:
+      - outline_pattern
+      - reasoning_shape
+      - transition_pattern
+      - schema_reuse
+      - structural_originality
+      - lineage_pattern
+    recommended_feature_sources:
+      - headings
+      - section_graph
+      - paragraph_transition_graph
+      - template_match
+      - rhetorical_structure
+    explanation_targets:
+      - どの型を引き継いでいるか
+      - どの構造が再利用されたか
+      - 独自構造か派生構造か
+
+scalar_features:
+  objective: >
+    ベクトルだけでは説明しきれない補助要因を保持し、
+    ARA の補正や reviewer の説明に利用する。
+  required_groups:
+    temporal_features:
+      description: 時間的特徴
+      fields:
+        - event_count
+        - active_window_seconds
+        - mean_inter_event_gap
+        - recency_score
+    quality_features:
+      description: 品質・信頼度に関する特徴
+      fields:
+        - confidence_hint
+        - uncertainty_hint
+        - revision_depth
+        - noise_ratio_estimate
+    origin_features:
+      description: 起源や代理属性に関する補助特徴
+      fields:
+        - origin_clarity_hint
+        - agency_clarity_hint
+        - citation_density
+        - provenance_gap_hint
+    structural_features:
+      description: 構造に関する補助特徴
+      fields:
+        - outline_depth
+        - reuse_count
+        - originality_hint
+        - structural_consistency
+  optional_groups:
+    textual_features:
+      fields:
+        - token_count
+        - sentence_count
+        - concept_density
+    policy_features:
+      fields:
+        - permission_hint
+        - restriction_hint
+  storage:
+    scalar_storage_key: scalar_features
+    types:
+      numeric: float_or_integer
+      categorical: enumerated_string
+      boolean: true_false
+
+encoding:
+  objective: >
+    raw traces から profile を生成するための符号化方針を定義する。
+  steps:
+    - collect_raw_trace_material
+    - normalize_input_fragments
+    - encode_behavior_vector
+    - encode_semantic_vector
+    - encode_structural_vector
+    - derive_scalar_features
+    - normalize_vectors
+    - attach_version_metadata
+    - emit_trace_vector_profile
+  raw_inputs:
+    allowed:
+      - prompt_text
+      - edits
+      - operation_logs
+      - generated_output_summary
+      - structure_summary
+      - provenance_refs
+    discouraged:
+      - unnecessary_pii
+      - raw fulltext retention without need
+  encoder_requirements:
+    behavior_encoder:
+      should_focus_on_pattern_not_quantity: true
+    semantic_encoder:
+      must_record_embedding_model_id: true
+    structural_encoder:
+      should_capture_form_and_relation_patterns: true
+
+normalization:
+  objective: >
+    similarity 計算の一貫性を保つため、各層のベクトル正規化方針を定義する。
+  default_policy:
+    behavior_vector:
+      method: l2_normalization
+    semantic_vector:
+      method: l2_normalization
+    structural_vector:
+      method: l2_normalization
+  scalar_policy:
+    numeric_scalars:
+      recommended_method: min_max_or_zscore_by_profile
+    categorical_scalars:
+      recommended_method: controlled_vocab_mapping
+  requirements:
+    - normalization_profile_must_be_recorded
+    - comparison_requires_same_normalization_policy
+    - mixed_policy_comparison_should_be_avoided
+
+missing_value_policy:
+  objective: >
+    一部の層や補助特徴が欠損しても profile を扱えるようにする。
+  vector_missing_rules:
+    behavior_vector_missing:
+      action: allow_with_penalty
+      penalty_hint: reduce_behavior_weight_or_confidence
+    semantic_vector_missing:
+      action: hold_or_low_confidence
+      penalty_hint: semantic layer is usually dominant
+    structural_vector_missing:
+      action: allow_with_penalty
+      penalty_hint: reduce_structure_weight
+  scalar_missing_rules:
+    missing_scalar_feature:
+      action: impute_or_mark_unknown
+    provenance_related_missing:
+      action: escalate_to_policy_or_hold
+  requirements:
+    - missingness_must_be_explicitly_recorded
+    - imputation_policy_must_be_versioned
+
+similarity_contract:
+  objective: >
+    ARA が各層ベクトルをどのように扱うかの前提契約を定義する。
+  layerwise_similarity:
+    behavior_similarity:
+      recommended_metric: cosine_similarity
+    semantic_similarity:
+      recommended_metric: cosine_similarity
+    structural_similarity:
+      recommended_metric: cosine_similarity
+  composition:
+    default_expression: >
+      Similarity_i_e =
+      alpha * SimBehavior_i_e +
+      beta * SimSemantic_i_e +
+      gamma * SimStructure_i_e
+    default_weights:
+      alpha: 0.15
+      beta: 0.55
+      gamma: 0.30
+    requirements:
+      - alpha_plus_beta_plus_gamma_must_equal_1
+      - semantic_weight_should_be_highest_in_default_profile
+  confidence_interaction:
+    description: >
+      similarity は最終スコアではなく、confidence, decay, permission,
+      origin_factor, agency_factor 等と結合されて評価される。
+  non_goal:
+    description: >
+      単層 similarity のみで帰属や価値を断定しない。
+
+retrieval_contract:
+  objective: >
+    vector store から候補を取得する際の層別 retrieval 契約を定義する。
+  named_vectors:
+    required:
+      - behavior
+      - semantic
+      - structural
+  default_top_k:
+    behavior: 10
+    semantic: 20
+    structural: 10
+  merge_strategy:
+    name: weighted_union
+    description: >
+      各層の retrieval 結果を重み付きで結合し、重複候補を統合する。
+  candidate_deduplication:
+    enabled: true
+    key_priority:
+      - origin_ref
+      - work_id
+      - structure_id
+  requirements:
+    - retrieval_profile_must_be_recorded
+    - top_k_changes_should_be_versioned
+
+versioning:
+  objective: >
+    profile の次元数、符号化方式、正規化方式、埋め込みモデル変更を追跡可能にする。
+  required_fields:
+    - profile_version
+    - behavior_encoder_version
+    - semantic_encoder_version
+    - structural_encoder_version
+    - embedding_model_id
+    - normalization_profile_id
+    - dimension_profile_id
+  rules:
+    - dimension_change_requires_new_profile_version
+    - embedding_model_change_requires_new_semantic_encoder_version
+    - normalization_change_requires_new_normalization_profile_id
+    - incompatible_profiles_must_not_be_silently_compared
+
+storage_model:
+  objective: >
+    profile の保存形式と参照形式を定義する。
+  trace_vector_record:
+    type: object
+    required_fields:
+      - trace_vector_id
+      - trace_id
+      - profile_version
+      - dimension_profile
+      - vectors
+      - scalar_features
+      - normalization_profile
+      - encoder_versions
+    properties:
+      trace_vector_id:
+        type: string
+      trace_id:
+        type: string
+      profile_version:
+        type: string
+      dimension_profile:
+        type: object
+        required_fields:
+          - behavior_dimension
+          - semantic_dimension
+          - structural_dimension
+      vectors:
+        type: object
+        required_fields:
+          - behavior
+          - semantic
+          - structural
+      scalar_features:
+        type: object
+      normalization_profile:
+        type: object
+      encoder_versions:
+        type: object
+      metadata:
+        type: object
+        additional_properties: true
+  persistence_policy:
+    vector_store:
+      stores_full_vectors: true
+    graph_store:
+      stores_full_vectors: false
+      stores_vector_refs: true
+    ledger:
+      stores_full_vectors: false
+      stores_hashes_and_refs: true
+
+privacy_and_security:
+  data_minimization:
+    description: >
+      配分判断に不要な raw content や個人情報は保持しない。
+  pii_policy:
+    description: >
+      個人識別情報は pseudonymize または除外可能であるべき。
+  raw_text_retention:
+    description: >
+      semantic encoding 後の全文保持は別方針で制御し、本 profile 自体は
+      ベクトルと必要最小限のスカラーに寄せるべきである。
+  integrity:
+    description: >
+      trace_vector_record には hash または content fingerprint を付与してもよい。
+
+explanation_contract:
+  objective: >
+    reviewer や rights holder に対し、痕跡表現の説明可能性を担保する。
+  required_explanation_fields:
+    - active_layers
+    - missing_layers
+    - similarity_breakdown
+    - scalar_feature_summary
+    - encoder_versions
+    - normalization_profile_id
+  human_readable_summary:
+    should_include:
+      - どの層が主に効いたか
+      - どの特徴が弱かったか
+      - 欠損があるか
+      - 構造再利用の有無
+  machine_readable_summary:
+    should_include:
+      - layer_dimensions
+      - similarity_values
+      - scalar_feature_values
+      - missing_flags
+
+validation:
+  hard_rules:
+    - name: all_required_vectors_must_exist
+      expression: behavior_vector != null and semantic_vector != null and structural_vector != null
+    - name: vector_dimensions_must_match_profile
+      expression: >
+        len(behavior_vector) = behavior_dimension and
+        len(semantic_vector) = semantic_dimension and
+        len(structural_vector) = structural_dimension
+    - name: normalization_profile_must_exist
+      expression: normalization_profile_id != null
+    - name: profile_version_must_exist
+      expression: profile_version != null
+    - name: encoder_versions_must_exist
+      expression: behavior_encoder_version != null and semantic_encoder_version != null and structural_encoder_version != null
+  soft_rules:
+    - name: scalar_features_should_exist
+      expression: scalar_features should not be empty
+    - name: explanation_summary_should_exist
+      expression: explanation summary should be derivable
+    - name: provenance_hints_should_exist_when_possible
+      expression: origin or provenance hints should be included when available
+
+failure_modes:
+  recoverable:
+    - missing_behavior_vector
+    - missing_structural_vector
+    - partial_scalar_feature_loss
+    - retrievable_model_metadata_missing
+  unrecoverable:
+    - semantic_vector_missing_in_standard_profile
+    - dimension_mismatch
+    - incompatible_profile_versions_compared_as_if_equal
+    - corrupted_vector_payload
+  handling:
+    recoverable:
+      action: penalize_or_hold_based_on_policy
+    unrecoverable:
+      action: fail_or_hold_and_emit_profile_error
+
+implementation_notes:
+  recommended_stack:
+    vector_encoding: embedding_model_plus_feature_extractor
+    vector_storage: qdrant_or_equivalent
+    metadata_storage: relational_or_document_store
+    explanation_support: ara_plus_report_generator
+  separation_of_concerns:
+    - vector generation is separate from allocation computation
+    - graph mapping uses vector-derived relations, not raw vectors
+    - ledger stores refs and hashes, not full vector arrays
+  remarks:
+    - 初期版では standard profile を推奨
+    - semantic layer は最重要だが万能ではない
+    - behavior layer は量ではなく質を取るべき
+    - structural layer は文章の型と派生構造を捉える要
+    - 台帳に早く入れすぎると綺麗に保存された混乱になる
+
+sample_execution:
+  input_summary:
+    trace_id: tr_2026_04_001
+    profile_version: "0.1.0"
+    dimension_profile: standard
+    encoder_versions:
+      behavior_encoder_version: bev_0.1
+      semantic_encoder_version: sev_0.1
+      structural_encoder_version: stv_0.1
+    embedding_model_id: sem_model_standard_1024
+  output_summary:
+    trace_vector_record:
+      trace_vector_id: tvp_2026_04_001
+      dimensions:
+        behavior: 128
+        semantic: 1024
+        structural: 128
+      missing_flags:
+        behavior: false
+        semantic: false
+        structural: false
+      scalar_feature_summary:
+        event_count: 14
+        revision_depth: 0.62
+        origin_clarity_hint: 0.85
+        structural_consistency: 0.78
+      explanation_summary: >
+        semantic layer が主に効き、structural layer が補強し、
+        behavior layer は中程度に寄与した。
+
+interoperability:
+  with_ara:
+    description: >
+      ARA は本仕様の named vectors と scalar_features を入力として受け取り、
+      layerwise similarity と policy-aware scoring に利用する。
+  with_lineage_map:
+    description: >
+      Cultural Lineage Map は profile 自体ではなく、
+      profile から導出された関係要約と metrics を表示に用いる。
+  with_ledger:
+    description: >
+      Trace Ledger Architecture は profile の hash, version, refs を保持し、
+      full vectors は保持しない。
