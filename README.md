@@ -74,6 +74,105 @@ This repository is organized around the following logic:
    └─ workflows/
       └─ validate-specs.yml
 
+## Start Here
+
+This repository can be read from two directions:
+
+- **from formula to system**
+- **from system to audit**
+
+For most readers, the recommended reading order is:
+
+### 1. Read this README
+Start with the overview, repository structure, and design principles to understand the scope of the repository.
+
+### 2. Open the sample file
+Read:
+
+- `examples/royalty-pool-formula-v0.1.sample.yaml`
+
+This is the fastest way to understand the intended document shape.
+
+### 3. Check the validation schema
+Open:
+
+- `schema/royalty-pool-formula-v0.1.schema.json`
+
+This defines the machine-readable contract for the formula document.
+
+### 4. Read the trace representation layer
+Open:
+
+- `spec/trace-vector-profile-v0.1.yaml`
+
+This defines how traces are represented as a stable multi-vector profile across:
+
+- behavior
+- semantic
+- structural
+
+It is the bridge between trace capture and ARA scoring.
+
+### 5. Read the execution layer
+Open:
+
+- `spec/ara-engine-v0.1.yaml`
+
+This shows how the system computes:
+
+- scoring
+- allocation
+- hold decisions
+- recirculation
+- explanation
+- ledger events
+
+### 6. Read the visualization layer
+Open:
+
+- `spec/cultural-lineage-map-v0.1.yaml`
+
+This shows how lineage, structure reuse, and value flow are visualized.
+
+### 7. Read the audit layer
+Open:
+
+- `spec/trace-ledger-architecture-v0.1.yaml`
+
+This shows how committed outputs are stored in an append-only, tamper-evident form.
+
+### 8. Read the one-page summary
+Open:
+
+- `docs/one-page-overview.md`
+
+This gives a compact architectural summary.
+
+### 9. Run validation locally
+Use the schema validation command described below to confirm that the example passes.
+
+### 10. Review CI behavior
+Open:
+
+- `.github/workflows/validate-specs.yml`
+
+This shows how validation is enforced automatically.
+
+### Recommended reading paths
+
+#### For specification readers
+README → sample YAML → schema JSON → trace vector profile → ARA spec
+
+#### For architecture readers
+README → trace vector profile → ARA spec → lineage map spec → ledger spec
+
+#### For audit / governance readers
+README → ledger spec → lineage map spec → license
+
+### In one sentence
+
+This repository defines how trace-aware royalty allocation can be **specified, vectorized, executed, visualized, and audited**.
+
 Directory overview
 docs/
 
